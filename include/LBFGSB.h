@@ -12,6 +12,7 @@
 #include "LBFGSpp/Cauchy.h"
 #include "LBFGSpp/SubspaceMin.h"
 #include "LBFGSpp/LineSearchMoreThuente.h"
+#include <functional>
 
 
 namespace LBFGSpp {
@@ -32,7 +33,7 @@ private:
 
     const LBFGSBParam<Scalar>& m_param;  // Parameters to control the LBFGS algorithm
     BFGSMat<Scalar, true>      m_bfgs;   // Approximation to the Hessian matrix
-    Vector                     m_fx;     // History of the objective function values
+    //Vector                     m_fx;     // History of the objective function values
     Vector                     m_xp;     // Old x
     Vector                     m_grad;   // New gradient
     Vector                     m_gradp;  // Old gradient
@@ -48,8 +49,8 @@ private:
         m_grad.resize(n);
         m_gradp.resize(n);
         m_drt.resize(n);
-        if(m_param.past > 0)
-            m_fx.resize(m_param.past);
+        //if(m_param.past > 0)
+        //    m_fx.resize(m_param.past);
     }
 
     // Project the vector x to the bound constraint set
@@ -97,6 +98,12 @@ public:
         m_param.check_param();
     }
 
+	// Optional:
+	// Returns true if the solver should exit, default uses ||g||<epsilon or ||g||<||x||epsilon_rel
+	// or (obj_prev - obj) / obj_prev < delta, where ||g|| is the projected gradient norm.
+	//   is_converged = converged(obj_prev, obj, x_prev, x, grad, lb, ub)
+	std::function<bool(Scalar, Scalar, const Vector&, const Vector&, const Vector&, const Vector&, const Vector&)> converged;
+
     ///
     /// Minimizing a multivariate function subject to box constraints, using the L-BFGS-B algorithm.
     /// Exceptions will be thrown if error occurs.
@@ -122,6 +129,12 @@ public:
         if(lb.size() != n || ub.size() != n)
             throw std::invalid_argument("'lb' and 'ub' must have the same size as 'x'");
 
+        if (converged == nullptr)
+        {
+	        using namespace std::placeholders;
+	        converged = std::bind(&LBFGSBSolver::default_converged, this, _1, _2, _3, _4, _5, _6, _7);
+        }
+
         // Check whether the initial vector is within the bounds
         // If not, project to the feasible set
         force_bounds(x, lb, ub);
@@ -130,19 +143,19 @@ public:
         reset(n);
 
         // The length of lag for objective function value to test convergence
-        const int fpast = m_param.past;
+        //const int fpast = m_param.past;
 
         // Evaluate function and compute gradient
+        Scalar fx_prev = std::numeric_limits<Scalar>::infinity();
         fx = f(x, m_grad);
-        Scalar projgnorm = proj_grad_norm(x, m_grad, lb, ub);
-        if(fpast > 0)
-            m_fx[0] = fx;
+        //if(fpast > 0)
+        //    m_fx[0] = fx;
 
         // std::cout << "x0 = " << x.transpose() << std::endl;
         // std::cout << "f(x0) = " << fx << ", ||proj_grad|| = " << projgnorm << std::endl << std::endl;
 
         // Early exit if the initial x is already a minimizer
-        if(projgnorm <= m_param.epsilon || projgnorm <= m_param.epsilon_rel * x.norm())
+        if (converged(fx_prev, fx, Vector::Zero(n), x, m_grad, lb, ub))
         {
             return 1;
         }
@@ -178,29 +191,28 @@ public:
             step_max = std::min(m_param.max_step, step_max);
             Scalar step = Scalar(1);
             step = std::min(step, step_max);
+            fx_prev = fx;
             LineSearch<Scalar>::LineSearch(f, fx, x, m_grad, step, step_max, m_drt, m_xp, m_param);
 
             // New projected gradient norm
-            projgnorm = proj_grad_norm(x, m_grad, lb, ub);
+            //projgnorm = proj_grad_norm(x, m_grad, lb, ub);
 
             /* std::cout << "** Iteration " << k << std::endl;
             std::cout << "   x = " << x.transpose() << std::endl;
             std::cout << "   f(x) = " << fx << ", ||proj_grad|| = " << projgnorm << std::endl << std::endl; */
 
             // Convergence test -- gradient
-            if(projgnorm <= m_param.epsilon || projgnorm <= m_param.epsilon_rel * x.norm())
+            //if(projgnorm <= m_param.epsilon || projgnorm <= m_param.epsilon_rel * x.norm())
+            if (converged(fx_prev, fx, m_xp, x, m_grad, lb, ub))
             {
                 return k;
             }
             // Convergence test -- objective function value
-            if(fpast > 0)
-            {
-                const Scalar fxd = m_fx[k % fpast];
-                if(k >= fpast && abs(fxd - fx) <= m_param.delta * std::max(std::max(abs(fx), abs(fxd)), Scalar(1)))
-                    return k;
-
-                m_fx[k % fpast] = fx;
-            }
+            //if(fpast > 0)
+            //{
+            //    const Scalar fxd = m_fx[k % fpast];
+            //    m_fx[k % fpast] = fx;
+            //}
             // Maximum number of iterations
             if(m_param.max_iterations != 0 && k >= m_param.max_iterations)
             {
@@ -238,6 +250,39 @@ public:
 
         return k;
     }
+    
+    // Used if converged not set
+	// Returns true if:
+	// grad.norm <= abs_tol
+	// or
+	// grad.norm() <= rel_tol * x.norm()
+	// or
+	// (obj_prev - obj) / obj_prev < delta
+	bool default_converged(
+    	Scalar obj_prev,
+		Scalar obj,
+		const Vector& xprev,
+		const Vector& x,
+		const Vector& grad,
+		const Vector& lb,
+		const Vector& ub)
+	{
+	    (void)(obj_prev);
+	    (void)(obj);
+	    (void)(xprev);
+	    if (m_param.delta > 0 && !std::isinf(obj_prev))
+        {
+            Scalar rel_obj = (obj_prev - obj) / obj_prev;
+            if (rel_obj < m_param.delta) {
+                return true;
+            }
+        }
+        Scalar projgnorm = proj_grad_norm(x, grad, lb, ub);
+        if(projgnorm <= m_param.epsilon || projgnorm <= m_param.epsilon_rel * x.norm()) {
+            return true;
+        }
+        return false;
+	}
 };
 
 
