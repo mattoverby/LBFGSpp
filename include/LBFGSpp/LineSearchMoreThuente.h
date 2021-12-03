@@ -284,10 +284,10 @@ public:
             step = new_step;
 
             if(step < param.min_step)
-                throw std::runtime_error("the line search step became smaller than the minimum value allowed");
+                throw std::runtime_error("the line search step became smaller than the minimum value allowed: "+std::to_string(step));
 
             if(step > param.max_step)
-                throw std::runtime_error("the line search step became larger than the maximum value allowed");
+                throw std::runtime_error("the line search step became larger than the maximum value allowed: "+std::to_string(step));
 
             // Update parameter, function value, and gradient
             x.noalias() = xp + step * drt;
